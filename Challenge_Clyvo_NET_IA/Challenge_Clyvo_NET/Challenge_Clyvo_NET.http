@@ -1,0 +1,16 @@
+@Challenge_Clyvo_NET_HostAddress = http://localhost:5230
+
+GET {{Challenge_Clyvo_NET_HostAddress}}/health
+Accept: application/json
+
+###
+
+GET {{Challenge_Clyvo_NET_HostAddress}}/health/live
+Accept: application/json
+
+###
+
+GET {{Challenge_Clyvo_NET_HostAddress}}/health/ready
+Accept: application/json
+
+###
