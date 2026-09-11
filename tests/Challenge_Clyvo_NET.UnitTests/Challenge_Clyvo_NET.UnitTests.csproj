@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.9.0" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+
+    <!-- Mocking de dependências (padrão AAA) -->
+    <PackageReference Include="Moq" Version="4.20.72" />
+
+    <!-- Permite mockar DbSet<T>/consultas assíncronas do EF Core (ToListAsync,
+         FirstOrDefaultAsync, etc.) com Moq, sem precisar de um banco real -->
+    <PackageReference Include="MockQueryable.Moq" Version="10.0.8" />
+
+    <!-- Provedor InMemory, usado apenas para satisfazer o construtor do
+         AppDbContext (DbContextOptions<AppDbContext>) nos testes -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="10.0.5" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\Challenge_Clyvo_NET\Challenge_Clyvo_NET.csproj" />
+  </ItemGroup>
+
+</Project>
