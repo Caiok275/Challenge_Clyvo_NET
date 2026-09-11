@@ -1,3 +1,5 @@
 <Solution>
   <Project Path="Challenge_Clyvo_NET/Challenge_Clyvo_NET.csproj" />
+  <Project Path="tests/Challenge_Clyvo_NET.UnitTests/Challenge_Clyvo_NET.UnitTests.csproj" />
+  <Project Path="tests/Challenge_Clyvo_NET.IntegrationTests/Challenge_Clyvo_NET.IntegrationTests.csproj" />
 </Solution>

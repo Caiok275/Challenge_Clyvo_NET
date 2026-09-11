@@ -3,11 +3,8 @@ using Xunit;
 
 namespace Challenge_Clyvo_NET.UnitTests.Domain
 {
-    /// <summary>
-    /// Testes unitários da entidade de domínio Pessoa.
-    /// Não dependem de banco de dados, DI ou mocks: exercitam apenas as
-    /// regras da própria classe (construtor e Update).
-    /// </summary>
+    /// Testes Pessoa
+    /// (construtor e Update).
     public class PessoaTests
     {
         [Fact]
@@ -49,8 +46,6 @@ namespace Challenge_Clyvo_NET.UnitTests.Domain
         public void Constructor_NovaPessoa_IdPermaneceComValorPadraoAteSerPersistida()
         {
             // Arrange & Act
-            // (o Id é atribuído pelo banco de dados; antes de persistir, deve
-            // permanecer no valor padrão de int, já que o setter é privado)
             var pessoa = new Pessoa("Ana Souza", "12345678900", new DateTime(1995, 3, 10));
 
             // Assert

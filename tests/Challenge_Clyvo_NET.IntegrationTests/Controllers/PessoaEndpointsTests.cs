@@ -6,12 +6,10 @@ using Xunit;
 
 namespace Challenge_Clyvo_NET.IntegrationTests.Controllers
 {
-    /// <summary>
-    /// Testes de integração ponta a ponta para /api/pessoas: sobem a API real
+    /// Testes sobem a API real
     /// via WebApplicationFactory (com EF Core InMemory no lugar do Oracle) e
-    /// validam requisições HTTP completas — status code e corpo da resposta —
-    /// para os fluxos de sucesso e de erro (recurso não encontrado).
-    /// </summary>
+    /// validam requisições HTTP completas
+    /// 
     [Collection("Integration Tests")]
     public class PessoaEndpointsTests
     {
@@ -162,10 +160,7 @@ namespace Challenge_Clyvo_NET.IntegrationTests.Controllers
             Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         }
 
-        /// <summary>
-        /// Gera um CPF fictício e único por teste, para evitar colisões entre
-        /// testes que compartilham o mesmo banco InMemory (via Collection Fixture).
-        /// </summary>
+        /// Gera um CPF fictício e único por teste, para evitar conflito
         private static string GerarCpfUnico() => Guid.NewGuid().ToString("N")[..11];
     }
 }

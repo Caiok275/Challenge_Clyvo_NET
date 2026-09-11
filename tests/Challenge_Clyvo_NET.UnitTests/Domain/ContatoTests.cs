@@ -34,7 +34,8 @@ namespace Challenge_Clyvo_NET.UnitTests.Domain
             // Assert
             Assert.Equal("11988887777", contato.Numero);
             Assert.Equal("novo@exemplo.com", contato.Email);
-            Assert.Equal(3, contato.PessoaId); // Update não recebe pessoaId, então ele deve permanecer o mesmo
+            Assert.Equal(3, contato.PessoaId); 
+            // P.S O update não recebe pessoaId, então ele deve permanecer o mesmo
         }
     }
 }

@@ -18,6 +18,30 @@
     </PackageReference>
     <PackageReference Include="Oracle.EntityFrameworkCore" Version="10.23.26100" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="10.1.7" />
+    <!-- Fixa o Microsoft.OpenApi na faixa 2.x: Swashbuckle.AspNetCore 10.x e o
+         ASP.NET Core 10 só são compatíveis com Microsoft.OpenApi >= 2.7.5 e < 3.0.0.
+         Sem essa referência explícita, o NuGet pode resolver transitivamente
+         para a série 3.x (que mudou a API publicamente, ex.: propriedades que
+         eram graváveis viraram somente leitura), causando exceções em runtime
+         na geração do documento Swagger/OpenAPI. -->
+    <PackageReference Include="Microsoft.OpenApi" Version="2.7.5" />
+    <PackageReference Include="AspNetCore.HealthChecks.UI.Client" Version="9.0.0" />
+
+    <!-- Serilog: substitui o provedor de logging padrão do ASP.NET Core -->
+    <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" />
+    <PackageReference Include="Serilog.Settings.Configuration" Version="10.0.1" />
+    <PackageReference Include="Serilog.Sinks.Console" Version="6.1.1" />
+    <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
+
+    <!-- OpenTelemetry: tracing distribuído e métricas -->
+    <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.18.0" />
+    <PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.18.0" />
+    <PackageReference Include="OpenTelemetry.Instrumentation.Http" Version="1.18.0" />
+    <PackageReference Include="OpenTelemetry.Instrumentation.Runtime" Version="1.18.0" />
+    <PackageReference Include="OpenTelemetry.Instrumentation.EntityFrameworkCore" Version="1.18.0-beta.1" />
+    <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.18.0" />
+    <PackageReference Include="OpenTelemetry.Exporter.Prometheus.AspNetCore" Version="1.18.0-beta.1" />
+    <PackageReference Include="OpenTelemetry.Exporter.Console" Version="1.18.0" />
   </ItemGroup>
 
 </Project>

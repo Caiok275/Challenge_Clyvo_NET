@@ -1,0 +1,468 @@
+================================================================================
+ DOCUMENTAÇÃO - LOGGING, TRACING E MÉTRICAS DA API Challenge_Clyvo_NET
+================================================================================
+
+1. VISÃO GERAL
+--------------------------------------------------------------------------------
+A API implementa os três pilares clássicos de observabilidade:
+
+  LOGGING  -> registros textuais/estruturados do que aconteceu (via ILogger
+              padrão do ASP.NET Core), correlacionados por requisição.
+  TRACING  -> rastreamento distribuído das requisições entre camadas
+              (entrada HTTP -> acesso a dados via EF Core -> chamadas HTTP
+              de saída), implementado com OpenTelemetry.
+  MÉTRICAS -> indicadores numéricos agregados de desempenho (tempo de
+              resposta, taxa de erros, uso de runtime), também via
+              OpenTelemetry, expostos em /metrics no formato Prometheus.
+
+Os três pilares são amarrados pelo mesmo Correlation ID / Trace ID, gerado
+pelo CorrelationIdMiddleware em cada requisição — por isso é possível pegar
+uma linha de log, achar o trace correspondente e ver as métricas daquela
+mesma janela de tempo, todos referenciando a mesma requisição.
+
+Arquivos envolvidos:
+  Program.cs                              -> configuração/registro de tudo
+  Middleware/CorrelationId.cs             -> middleware que amarra os 3 pilares
+  Telemetry/AppActivitySource.cs          -> fonte de spans (traces) customizados
+  Telemetry/AppMetrics.cs                 -> métricas customizadas
+  appsettings.json (seção "OpenTelemetry") -> nome do serviço e endpoint OTLP
+
+
+2. LOGGING (SERILOG)
+--------------------------------------------------------------------------------
+2.1 Tecnologia
+  A API usa Serilog (https://serilog.net) como provedor de logging,
+  substituindo o provedor padrão do ASP.NET Core (Microsoft.Extensions.
+  Logging.Console). Pacotes usados (Challenge_Clyvo_NET.csproj):
+
+    Serilog.AspNetCore              -> integração com o host do ASP.NET Core
+                                        (builder.Host.UseSerilog(...))
+    Serilog.Settings.Configuration  -> permite configurar o Serilog via
+                                        appsettings.json em vez de código
+    Serilog.Sinks.Console           -> escreve os logs no console
+    Serilog.Sinks.File              -> escreve os logs em arquivo, com
+                                        rotação diária
+
+2.2 Configuração em duas etapas (bootstrap logger)
+  Local: Program.cs (topo do arquivo, antes de WebApplication.CreateBuilder)
+
+    Log.Logger = new LoggerConfiguration()
+        .WriteTo.Console()
+        .CreateBootstrapLogger();
+
+    try
+    {
+        Log.Information("Iniciando a aplicação Challenge_Clyvo_NET");
+        var builder = WebApplication.CreateBuilder(args);
+
+        builder.Host.UseSerilog((context, services, configuration) => configuration
+            .ReadFrom.Configuration(context.Configuration)
+            .ReadFrom.Services(services)
+            .Enrich.FromLogContext());
+        // ... resto da configuração da aplicação ...
+        app.Run();
+    }
+    catch (Exception ex) when (ex is not HostAbortedException)
+    {
+        Log.Fatal(ex, "A aplicação terminou inesperadamente durante a inicialização");
+    }
+    finally
+    {
+        Log.CloseAndFlush();
+    }
+
+  Por que esse padrão (bootstrap logger + try/catch/finally)?
+    - O logger "bootstrap" (só console) existe para capturar qualquer
+      problema que aconteça ANTES do host/DI estarem prontos (ex.: erro
+      ao ler appsettings.json, falha ao configurar um serviço) — sem ele,
+      esses erros apareceriam só no console padrão do .NET, sem passar
+      pelo Serilog.
+    - builder.Host.UseSerilog(...) substitui esse logger bootstrap pelo
+      logger "definitivo", montado a partir da seção "Serilog" do
+      appsettings.json (via ReadFrom.Configuration).
+    - O catch genérico com Log.Fatal garante que qualquer exceção não
+      tratada durante toda a vida da aplicação seja registrada antes do
+      processo encerrar.
+    - O filtro "when (ex is not HostAbortedException)" evita logar como
+      Fatal a exceção que as ferramentas de design-time do EF Core (ex.:
+      "dotnet ef migrations add") lançam de propósito para abortar depois
+      de inspecionar os serviços — sem esse filtro, todo comando
+      "dotnet ef ..." apareceria (incorretamente) como uma falha fatal.
+    - Log.CloseAndFlush() no finally garante que nenhum log fique
+      "preso" em buffer (principalmente do sink de arquivo) quando a
+      aplicação encerra.
+
+2.3 Configuração (appsettings.json, seção "Serilog")
+
+    "Serilog": {
+      "MinimumLevel": {
+        "Default": "Information",
+        "Override": {
+          "Microsoft.AspNetCore": "Warning",
+          "Microsoft.EntityFrameworkCore": "Warning",
+          "System": "Warning"
+        }
+      },
+      "WriteTo": [
+        { "Name": "Console", "Args": { "outputTemplate": "..." } },
+        { "Name": "File", "Args": { "path": "logs/log-.txt", "rollingInterval": "Day", "retainedFileCountLimit": 14, "outputTemplate": "..." } }
+      ],
+      "Enrich": [ "FromLogContext" ],
+      "Properties": { "Application": "Challenge_Clyvo_NET" }
+    }
+
+  - MinimumLevel.Default -> nível mínimo geral (Information). Em
+    appsettings.Development.json, esse valor é sobrescrito para "Debug",
+    deixando o log mais verboso só em desenvolvimento.
+  - MinimumLevel.Override -> silencia o ruído dos logs internos do
+    ASP.NET Core, EF Core e do namespace System, que por padrão também
+    logam em Information e poluiriam a saída.
+  - WriteTo -> dois sinks ativos ao mesmo tempo:
+      Console -> saída legível no terminal durante o desenvolvimento.
+      File    -> logs/log-YYYYMMDD.txt, um arquivo por dia
+                 (rollingInterval: Day), mantendo só os últimos 14 dias
+                 (retainedFileCountLimit: 14) — os mais antigos são
+                 apagados automaticamente.
+  - Enrich: [ "FromLogContext" ] -> habilita o Serilog.Context.LogContext,
+    o mecanismo que permite que propriedades "ambientes" (como
+    CorrelationId e TraceId, ver seção 2.4) sejam anexadas a todo log
+    emitido durante aquele fluxo de execução, sem precisar passá-las
+    manualmente em cada chamada de log.
+  - Properties.Application -> propriedade fixa "Application=Challenge_
+    Clyvo_NET" anexada a todo log, útil se os logs forem centralizados
+    junto com os de outras aplicações no futuro.
+
+  A pasta logs/ é gerada automaticamente ao rodar a aplicação e está no
+  .gitignore (não deve ser versionada).
+
+2.4 Correlação (CorrelationIdMiddleware)
+  Local: Middleware/CorrelationId.cs — nenhuma mudança de código foi
+  necessária aqui ao migrar para o Serilog. O middleware continua usando
+  a API padrão do ASP.NET Core (ILogger<T>.BeginScope), passando um
+  Dictionary<string, object> com CorrelationId e TraceId:
+
+    using (_logger.BeginScope(new Dictionary<string, object>
+    {
+        ["CorrelationId"] = correlationId,
+        ["TraceId"] = activity?.TraceId.ToString() ?? string.Empty
+    }))
+    {
+        // logs emitidos aqui dentro (e por qualquer código chamado a
+        // partir daqui, inclusive dentro dos controllers) carregam
+        // CorrelationId e TraceId automaticamente.
+    }
+
+  Isso funciona com o Serilog "de graça": o bridge Serilog<->Microsoft.
+  Extensions.Logging propaga automaticamente o estado do BeginScope para
+  o Serilog.Context.LogContext, e como "Enrich": ["FromLogContext"] está
+  habilitado (seção 2.3), essas propriedades acabam aparecendo nos
+  outputTemplate como {CorrelationId} e {TraceId} — tanto no console
+  quanto no arquivo.
+
+  Resumo do fluxo: gera/recebe Correlation ID -> abre BeginScope ->
+  Serilog captura via LogContext -> aparece em todo log da requisição
+  (console + arquivo) -> também vira tag do span de trace (ver seção 3.4)
+  -> e alimenta as métricas (ver seção 4.3). Os três pilares usam o
+  mesmo identificador.
+
+2.5 Exemplo do que aparece no console
+
+    [14:32:05 INF] Challenge_Clyvo_NET.Middleware.CorrelationIdMiddleware
+          CorrelationId=a1b2c3d4-5678-90ab-cdef-1234567890ab TraceId=4bf92f3577b34da6a3ce929d0e0e4736 Requisição iniciada GET /api/pessoas
+    [14:32:05 INF] Challenge_Clyvo_NET.Middleware.CorrelationIdMiddleware
+          CorrelationId=a1b2c3d4-5678-90ab-cdef-1234567890ab TraceId=4bf92f3577b34da6a3ce929d0e0e4736 Requisição finalizada GET /api/pessoas -> 200 em 42.31ms
+
+  O mesmo conteúdo (em outro formato de timestamp) é gravado em
+  logs/log-AAAAMMDD.txt.
+
+2.6 Como usar em outros pontos do código (ex.: dentro de um controller)
+  Continua igual, independentemente de o provedor ser Serilog ou não —
+  basta injetar ILogger<T> normalmente:
+
+    public class PessoaController : ControllerBase
+    {
+        private readonly ILogger<PessoaController> _logger;
+        public PessoaController(AppDbContext context, ILogger<PessoaController> logger)
+        {
+            _logger = logger;
+        }
+        // ...
+        _logger.LogInformation("Pessoa {Id} consultada", id);
+    }
+
+  Como esse log acontece durante o mesmo escopo aberto pelo
+  CorrelationIdMiddleware, ele automaticamente herda CorrelationId e
+  TraceId, sem nenhum código extra.
+
+  Alternativa "nativa" do Serilog (equivalente, caso prefiram): injetar
+  Serilog.ILogger em vez de Microsoft.Extensions.Logging.ILogger<T>, e
+  usar Serilog.Context.LogContext.PushProperty(...) diretamente. Não foi
+  necessário aqui porque o BeginScope padrão já resolve o problema.
+
+2.7 Limitações atuais
+  - Log em texto simples (console) e arquivo plano; não há um sink
+    estruturado externo (ex.: Seq, Elasticsearch, Application Insights,
+    Grafana Loki) configurado — é só adicionar o pacote de sink
+    correspondente e um bloco em "WriteTo" no appsettings.json.
+  - Não há logging de erros de validação de modelo (ModelState) — o
+    [ApiController] já devolve 400 automaticamente, mas isso não gera
+    uma linha de log hoje.
+  - Não foi adicionado app.UseSerilogRequestLogging() (o middleware
+    "pronto" do Serilog.AspNetCore para logar uma linha por requisição),
+    porque o CorrelationIdMiddleware já cobre esse papel de forma mais
+    detalhada (com CorrelationId, TraceId e duração). Se quiserem os dois
+    formatos, dá para adicionar sem conflito, mas geraria linhas
+    duplicadas por requisição.
+
+
+3. TRACING (RASTREAMENTO DISTRIBUÍDO)
+--------------------------------------------------------------------------------
+3.1 Tecnologia
+  Implementado com o SDK oficial do OpenTelemetry para .NET
+  (OpenTelemetry.Extensions.Hosting), registrado em Program.cs via
+  builder.Services.AddOpenTelemetry().WithTracing(...).
+
+3.2 O que é rastreado automaticamente (instrumentações)
+  a) AddAspNetCoreInstrumentation()
+     Cria o span "raiz" de cada requisição HTTP recebida pela API (a
+     camada de entrada). Configurado com:
+       - RecordException = true -> se uma exceção não tratada subir até
+         o ASP.NET Core, ela é anexada ao span automaticamente.
+       - Filter -> exclui o próprio endpoint /metrics do rastreamento,
+         para não poluir os traces com o tráfego de scraping do
+         Prometheus.
+
+  b) AddHttpClientInstrumentation()
+     Rastreia qualquer chamada HTTP de saída feita via HttpClient (hoje a
+     API não consome nenhum serviço externo, mas a instrumentação já fica
+     pronta para o dia em que isso acontecer — o traceparent do W3C é
+     propagado automaticamente para o serviço de destino).
+
+  c) AddEntityFrameworkCoreInstrumentation()
+     Rastreia as consultas feitas via EF Core (camada de acesso a dados /
+     Oracle), criando um span filho do span da requisição para cada
+     comando executado no banco. Configurado com:
+       - EnrichWithIDbCommand -> adiciona o texto do SQL efetivamente
+         executado (command.CommandText) como tag "db.statement" do
+         span, o que ajuda bastante a depurar queries lentas.
+     OBS: este pacote (OpenTelemetry.Instrumentation.EntityFrameworkCore)
+     ainda está em versão beta (1.18.0-beta.1) — é o estado atual do
+     ecossistema, mas vale reavaliar quando uma versão estável sair.
+
+  d) AddSource(AppActivitySource.Name)
+     Habilita spans manuais (ver seção 3.3).
+
+3.3 Spans manuais (Telemetry/AppActivitySource.cs)
+  Fornece um ActivitySource próprio da aplicação, para instrumentar
+  pontos de negócio específicos que valham a pena destacar em um trace
+  (ex.: uma regra de validação cara, uma orquestração entre várias
+  entidades). Uso:
+
+    using var activity = AppActivitySource.Instance.StartActivity("NomeDaOperacao");
+    activity?.SetTag("chave", valor);
+
+  Hoje nenhum controller usa isso ainda — é a "porta de entrada" para
+  tracing customizado, caso surja uma operação de negócio complexa o
+  suficiente para justificar um span próprio (além dos spans automáticos
+  de HTTP/EF Core).
+
+3.4 Correlation ID dentro do trace
+  Como descrito na seção 2.2, o CorrelationIdMiddleware anexa o
+  Correlation ID ao span atual como tag (app.correlation_id) e como
+  Baggage (correlation.id) — a Baggage é propagada automaticamente via
+  header entre serviços, então se esta API um dia chamar outro serviço
+  também instrumentado com OpenTelemetry, o mesmo Correlation ID
+  atravessa a chamada.
+
+3.5 Para onde os traces são exportados
+  Controlado por appsettings.json, seção "OpenTelemetry:OtlpEndpoint":
+
+    "OpenTelemetry": {
+      "ServiceName": "Challenge_Clyvo_NET",
+      "OtlpEndpoint": ""
+    }
+
+  - Se OtlpEndpoint estiver preenchido (ex.: "http://localhost:4317"):
+    os traces são exportados via OTLP (protocolo padrão do OpenTelemetry)
+    para um coletor — pode ser um OpenTelemetry Collector, Jaeger, Grafana
+    Tempo, etc.
+  - Se OtlpEndpoint estiver vazio E o ambiente for Development: os traces
+    são impressos no console (ConsoleExporter), só para inspeção rápida
+    em desenvolvimento.
+  - Se OtlpEndpoint estiver vazio E o ambiente NÃO for Development: nenhum
+    exportador é adicionado — o SDK processa os spans normalmente mas eles
+    não vão a lugar nenhum (não há erro, só não há exportação; é preciso
+    configurar OtlpEndpoint em produção para os traces terem utilidade).
+
+3.6 Como visualizar os traces localmente (exemplo com Jaeger)
+    docker run -d --name jaeger \
+      -p 16686:16686 -p 4317:4317 \
+      jaegertracing/all-in-one:latest
+
+  Depois, configurar em appsettings.json (ou variável de ambiente
+  OpenTelemetry__OtlpEndpoint):
+    "OpenTelemetry:OtlpEndpoint": "http://localhost:4317"
+
+  Rodar a API, gerar algumas requisições, e abrir http://localhost:16686
+  para navegar pelos traces (span de entrada HTTP -> span(s) de consulta
+  Oracle, com o SQL executado, tempo de cada etapa, e o correlation id
+  como tag).
+
+
+4. MÉTRICAS
+--------------------------------------------------------------------------------
+4.1 Tecnologia
+  Também via OpenTelemetry, registrado em Program.cs através de
+  builder.Services.AddOpenTelemetry().WithMetrics(...).
+
+4.2 Métricas automáticas (instrumentações)
+  a) AddAspNetCoreInstrumentation()
+     Métricas nativas do ASP.NET Core (ex.: http.server.request.duration
+     — histograma de duração por rota/método/status — e contadores de
+     requisições ativas).
+  b) AddHttpClientInstrumentation()
+     Métricas de chamadas HTTP de saída (quando existirem).
+  c) AddRuntimeInstrumentation()
+     Métricas do runtime do .NET: uso de GC, threads no pool, exceções
+     lançadas, memória alocada, etc. — útil para monitorar a saúde do
+     processo em si, além da aplicação.
+
+4.3 Métricas customizadas (Telemetry/AppMetrics.cs)
+  Classe registrada como singleton no DI (builder.Services.AddSingleton
+  <AppMetrics>()), injetada no CorrelationIdMiddleware, que a chama ao
+  final de cada requisição (RecordRequest). Usa IMeterFactory (habilitado
+  via builder.Services.AddMetrics()) para criar o Meter — é o padrão
+  recomendado desde .NET 8 para métricas via DI.
+
+  Nome do Meter: "Challenge_Clyvo_NET"
+
+  Instrumentos expostos:
+
+    app.http.server.request.duration   (Histogram<double>, unidade "ms")
+      Tempo de resposta de cada requisição HTTP, em milissegundos.
+      Tags: http.request.method, http.route, http.response.status_code
+
+    app.http.server.requests.total     (Counter<long>)
+      Total de requisições HTTP processadas.
+      Mesmas tags acima.
+
+    app.http.server.requests.errors    (Counter<long>)
+      Total de requisições HTTP finalizadas com erro (status >= 400).
+      Incrementado apenas quando o status indica erro. Mesmas tags acima.
+      É essa métrica, dividida pela app.http.server.requests.total, que dá
+      a TAXA DE ERROS (error rate) da API.
+
+  Por que métricas customizadas, se o ASP.NET Core já expõe as suas?
+  As instrumentações automáticas (item 4.2.a) já cobrem tempo de resposta
+  de forma genérica, mas as métricas customizadas em AppMetrics dão nomes
+  explícitos, fáceis de montar em um dashboard sem depender de detalhes
+  internos da instrumentação padrão, e adicionam de forma direta um
+  contador específico de erros (requests.errors), que não existe pronto
+  nas métricas nativas.
+
+4.4 Onde as métricas são expostas
+  Endpoint: GET /metrics
+  Formato:  texto Prometheus (Content-Type: text/plain; version=0.0.4)
+  Mapeado em Program.cs via: app.MapPrometheusScrapingEndpoint();
+
+  Exemplo de saída (resumida):
+
+    # HELP app_http_server_request_duration_ms Tempo de resposta das requisições HTTP, em milissegundos.
+    # TYPE app_http_server_request_duration_ms histogram
+    app_http_server_request_duration_ms_bucket{http_request_method="GET",http_route="/api/pessoas",http_response_status_code="200",le="10"} 3
+    ...
+    # HELP app_http_server_requests_total Total de requisições HTTP processadas.
+    # TYPE app_http_server_requests_total counter
+    app_http_server_requests_total{http_request_method="GET",http_route="/api/pessoas",http_response_status_code="200"} 12
+    # HELP app_http_server_requests_errors Total de requisições HTTP finalizadas com erro (status >= 400).
+    # TYPE app_http_server_requests_errors counter
+    app_http_server_requests_errors{http_request_method="GET",http_route="/api/pessoas",http_response_status_code="404"} 2
+
+  Esse endpoint é feito para ser "raspado" (scraped) periodicamente por um
+  servidor Prometheus, não para ser lido manualmente com frequência —
+  ainda assim, dá para abrir http://localhost:<porta>/metrics no navegador
+  a qualquer momento e ver o snapshot atual.
+
+  OBS: o pacote usado para expor esse endpoint
+  (OpenTelemetry.Exporter.Prometheus.AspNetCore) também está em versão
+  beta (1.18.0-beta.1) — mesmo caso do item 3.2.c, vale reavaliar quando
+  sair uma versão estável.
+
+4.5 Exportação adicional via OTLP
+  Assim como o tracing (seção 3.5), se appsettings.json ->
+  OpenTelemetry:OtlpEndpoint estiver preenchido, as métricas também são
+  enviadas via OTLP para o mesmo coletor configurado, além de continuarem
+  disponíveis em /metrics.
+
+4.6 Como visualizar as métricas localmente (exemplo com Prometheus + Grafana)
+  1) Configurar um prometheus.yml simples apontando para a API:
+
+       scrape_configs:
+         - job_name: 'challenge-clyvo-net'
+           metrics_path: '/metrics'
+           static_configs:
+             - targets: ['host.docker.internal:<porta-da-api>']
+
+  2) Subir o Prometheus:
+       docker run -d --name prometheus -p 9090:9090 \
+         -v $(pwd)/prometheus.yml:/etc/prometheus/prometheus.yml \
+         prom/prometheus
+
+  3) (Opcional) Subir o Grafana e apontar um datasource Prometheus para
+     http://localhost:9090, para montar dashboards de tempo de resposta e
+     taxa de erros a partir das métricas app_http_server_request_duration_ms
+     e app_http_server_requests_errors.
+
+
+5. RESUMO DE CONFIGURAÇÃO (appsettings.json)
+--------------------------------------------------------------------------------
+  "Serilog": {
+    "MinimumLevel": { "Default": "Information", "Override": { ... } },
+    "WriteTo": [ { "Name": "Console", ... }, { "Name": "File", ... } ],
+    "Enrich": [ "FromLogContext" ],
+    "Properties": { "Application": "Challenge_Clyvo_NET" }
+  },
+  "OpenTelemetry": {
+    "ServiceName": "Challenge_Clyvo_NET",   // nome do serviço nos traces/métricas
+    "OtlpEndpoint": ""                       // ex.: "http://localhost:4317"
+  }
+
+  Em appsettings.Development.json, "Serilog:MinimumLevel:Default" é
+  sobrescrito para "Debug" (log mais verboso em desenvolvimento).
+
+
+6. CHECKLIST RÁPIDO - "COMO EU VEJO ISSO RODANDO?"
+--------------------------------------------------------------------------------
+  [ ] Rodar a API (dotnet run) e olhar o console -> logs do Serilog, com
+      início/fim de cada requisição, CorrelationId e TraceId.
+  [ ] Conferir a pasta logs/ (criada automaticamente) -> mesmo conteúdo
+      gravado em arquivo, um por dia (log-AAAAMMDD.txt).
+  [ ] Abrir GET /metrics no navegador -> ver as métricas em texto
+      Prometheus (tempo de resposta e contadores de erro).
+  [ ] Subir um Jaeger local, configurar OpenTelemetry:OtlpEndpoint, gerar
+      algumas requisições e abrir http://localhost:16686 -> ver os traces
+      completos, com o span HTTP e os spans de consulta ao Oracle.
+  [ ] Fazer uma requisição enviando o header X-Correlation-Id manualmente
+      e conferir que o mesmo valor volta no header de resposta -> valida
+      a correlação ponta a ponta.
+
+
+7. LIMITAÇÕES CONHECIDAS
+--------------------------------------------------------------------------------
+  - Dois pacotes usados (instrumentação de EF Core e exportador Prometheus)
+    ainda estão em versão beta — é o estado atual do ecossistema
+    OpenTelemetry para .NET, mas pode exigir atualização quando saírem
+    versões estáveis.
+  - Sem OtlpEndpoint configurado, os traces em ambiente que não seja
+    Development não vão a lugar nenhum (não há exportador ativo) — é
+    necessário configurar um coletor em produção para os traces serem
+    úteis.
+  - As métricas customizadas (AppMetrics) só cobrem o nível HTTP
+    (requisição/resposta); não há métricas de negócio específicas (ex.:
+    "quantidade de consultas agendadas por dia") — podem ser adicionadas
+    seguindo o mesmo padrão de AppMetrics.RecordRequest, criando novos
+    Counter/Histogram no mesmo Meter.
+
+================================================================================
+ Fim do documento
+================================================================================

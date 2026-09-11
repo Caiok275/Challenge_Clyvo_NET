@@ -9,24 +9,11 @@ using Xunit;
 
 namespace Challenge_Clyvo_NET.UnitTests.Application
 {
-    /// <summary>
-    /// Testes unitários da camada de aplicação (PessoaController), com o
-    /// AppDbContext.Pessoas mockado via Moq/MockQueryable — sem tocar em
-    /// banco de dados real. O PessoaController foi escolhido como o
-    /// controller de referência para esta técnica porque não usa .Include()
-    /// (ver README dos testes para o motivo de outros controllers, que fazem
-    /// eager loading, serem cobertos pelos testes de integração em vez disso).
-    /// </summary>
+    /// Esse teste utiliza (PessoaController), com o
+    /// AppDbContext.Pessoas mockado usando Moq/MockQueryable sem usar
+    /// banco de dados real
     public class PessoaControllerTests
     {
-        /// <summary>
-        /// Monta um AppDbContext cujo DbSet&lt;Pessoa&gt; é substituído por um
-        /// mock (Moq + MockQueryable), preparado para suportar as operações
-        /// assíncronas do EF Core (ToListAsync, FirstOrDefaultAsync, etc.),
-        /// Add e Remove. O provedor InMemory é usado apenas para que o
-        /// construtor do AppDbContext tenha DbContextOptions válidas — os
-        /// dados de fato vêm da lista em memória controlada pelo teste.
-        /// </summary>
         private static (AppDbContext Context, Mock<DbSet<Pessoa>> MockSet, List<Pessoa> Pessoas) CreateSut(
             IEnumerable<Pessoa>? seed = null)
         {

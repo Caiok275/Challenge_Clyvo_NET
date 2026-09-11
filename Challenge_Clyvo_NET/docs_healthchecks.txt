@@ -1,0 +1,235 @@
+================================================================================
+ DOCUMENTAÇÃO - HEALTH CHECKS DA API Challenge_Clyvo_NET
+================================================================================
+
+1. VISÃO GERAL
+--------------------------------------------------------------------------------
+A API expõe um endpoint de verificação de saúde (health check) que informa se
+a aplicação e suas dependências críticas estão operando corretamente. Hoje a
+única dependência verificada é o banco de dados Oracle, através de uma
+checagem customizada chamada "OracleDB".
+
+Esse endpoint é usado para:
+  - Monitoramento manual (abrir a URL no navegador ou via curl/Postman).
+  - Orquestradores de containers (ex.: Docker/Kubernetes liveness e readiness
+    probes), que fazem essa chamada periodicamente para decidir se a
+    aplicação deve continuar recebendo tráfego ou ser reiniciada.
+  - Ferramentas de monitoramento externas (ex.: Uptime Kuma, Pingdom,
+    Datadog Synthetics) configuradas para alertar quando o status mudar de
+    Healthy para Unhealthy.
+
+
+2. ENDPOINT
+--------------------------------------------------------------------------------
+  Método:   GET
+  Rota:     /health                (endpoint "cru", mapeado via MapHealthChecks)
+  Rota:     /api/Health            (mesmo resultado, exposto como controller —
+                                     ver seção 2.1)
+  Auth:     nenhuma (rota pública, sem autenticação)
+
+  Exemplo de chamada:
+    curl -i http://localhost:<porta>/health
+
+  Códigos de status HTTP retornados:
+    200 OK                  -> todos os checks estão Healthy
+    200 OK ou 503            -> Degraded, dependendo da configuração
+                                 (por padrão, ASP.NET Core trata Degraded
+                                 como 200 OK; não há checks Degraded
+                                 configurados atualmente)
+    503 Service Unavailable -> pelo menos um check está Unhealthy
+
+
+2.1 POR QUE /health NÃO APARECE NO SWAGGER (E COMO CHAMAR)
+--------------------------------------------------------------------------------
+/health é mapeado via app.MapHealthChecks(...), que é um endpoint "cru" do
+middleware de Health Checks — ele não passa pelo ApiExplorer (mecanismo de
+metadados que o Swashbuckle escaneia para montar o Swagger), então nunca
+aparece na lista de endpoints do Swagger UI. Isso é comportamento padrão do
+ASP.NET Core, não um erro de configuração. O endpoint continua funcionando
+normalmente; ele só precisa ser chamado diretamente (navegador, curl,
+Postman, Insomnia, ou pelo probe do orquestrador), sem passar pelo Swagger.
+
+Para quem quiser ver/testar o health check pela UI do Swagger, existe também
+a rota GET /api/Health (Controllers/HealthController.cs), que devolve o
+mesmo resultado agregado dos checks, só que como uma action de controller
+comum — por isso aparece no Swagger normalmente, como qualquer outro
+endpoint da API. As duas rotas (/health e /api/Health) coexistem:
+  - /health      -> recomendado para orquestradores/monitoramento externo
+                     (mais leve, sem passar pela camada MVC)
+  - /api/Health  -> conveniência para explorar/testar pelo Swagger
+
+
+3. FORMATO DA RESPOSTA
+--------------------------------------------------------------------------------
+O corpo da resposta é gerado pelo pacote AspNetCore.HealthChecks.UI.Client
+(classe UIResponseWriter.WriteHealthCheckUIResponse), que devolve um JSON
+detalhado, no formato esperado pelo HealthChecks UI. Exemplo (tudo saudável):
+
+{
+  "status": "Healthy",
+  "totalDuration": "00:00:00.0452118",
+  "entries": {
+    "OracleDB": {
+      "data": {},
+      "description": "Database Oracle está saudável.",
+      "duration": "00:00:00.0448",
+      "status": "Healthy",
+      "tags": []
+    }
+  }
+}
+
+Exemplo quando o Oracle está indisponível:
+
+{
+  "status": "Unhealthy",
+  "totalDuration": "00:00:05.0123456",
+  "entries": {
+    "OracleDB": {
+      "data": {},
+      "description": "Falha ao verificar o Oracle DB.",
+      "duration": "00:00:05.0098",
+      "exception": "Oracle.ManagedDataAccess.Client.OracleException: ...",
+      "status": "Unhealthy",
+      "tags": []
+    }
+  }
+}
+
+Campos principais:
+  status         -> status agregado de todos os checks (Healthy / Degraded /
+                     Unhealthy)
+  totalDuration  -> tempo total gasto executando todos os checks
+  entries        -> um objeto por check registrado (hoje só existe "OracleDB")
+    description  -> mensagem definida no código do check
+    duration     -> tempo que aquele check específico levou para responder
+    exception    -> presente apenas quando o check lança/captura uma exceção
+    status       -> status individual daquele check
+    tags         -> tags associadas ao check (nenhuma definida atualmente)
+
+
+4. IMPLEMENTAÇÃO - OracleDBHealth
+--------------------------------------------------------------------------------
+Arquivo: Challenge_Clyvo_NET/HealthChecks/OracleDBHealth.cs
+
+Classe que implementa a interface padrão do ASP.NET Core para health checks
+(Microsoft.Extensions.Diagnostics.HealthChecks.IHealthCheck).
+
+Como funciona:
+  1. Recebe o AppDbContext já configurado via injeção de dependência (o
+     mesmo DbContext usado pelos controllers, apontando para o Oracle
+     configurado em appsettings.json / ConnectionStrings:OracleConnection).
+  2. Chama _dbContext.Database.CanConnectAsync(cancellationToken), que tenta
+     abrir uma conexão real com o banco e a fecha em seguida.
+  3. Se a conexão for bem-sucedida -> retorna HealthCheckResult.Healthy,
+     com a mensagem "Database Oracle está saudável.".
+  4. Se CanConnectAsync retornar false (sem lançar exceção) -> retorna
+     HealthCheckResult.Unhealthy com a mensagem "Não foi possível conectar
+     ao Oracle DB.".
+  5. Se qualquer exceção for lançada durante a checagem (timeout, credencial
+     inválida, host inacessível, etc.) -> é capturada e retorna
+     HealthCheckResult.Unhealthy("Falha ao verificar o Oracle DB.", ex),
+     anexando a exceção original à resposta (aparece no campo "exception"
+     do JSON, o que ajuda no diagnóstico).
+
+Importante: o check NÃO executa nenhuma query de negócio (SELECT em uma
+tabela real); ele apenas verifica se é possível abrir uma conexão com o
+banco configurado. Isso o torna rápido e de baixo impacto.
+
+
+5. REGISTRO E CONFIGURAÇÃO (Program.cs)
+--------------------------------------------------------------------------------
+Registro do serviço (na fase de configuração de serviços):
+
+    builder.Services.AddHealthChecks()
+        .AddCheck<OracleDBHealth>("OracleDB");
+
+  - AddHealthChecks() habilita o subsistema de health checks do ASP.NET Core.
+  - AddCheck<OracleDBHealth>("OracleDB") registra a classe OracleDBHealth
+    como um check com o nome "OracleDB" (esse é o nome que aparece na chave
+    dentro de "entries" no JSON de resposta). A instância é criada pelo
+    container de DI a cada execução do check, então o AppDbContext injetado
+    é resolvido normalmente pelo escopo da requisição.
+
+Mapeamento do endpoint HTTP (no pipeline, após app.Build()):
+
+    app.MapHealthChecks("/health", new HealthCheckOptions
+    {
+        ResponseWriter = UIResponseWriter.WriteHealthCheckUIResponse
+    });
+
+  - MapHealthChecks("/health", ...) expõe o resultado agregado de todos os
+    checks registrados na rota GET /health.
+  - ResponseWriter customizado (UIResponseWriter.WriteHealthCheckUIResponse,
+    do pacote AspNetCore.HealthChecks.UI.Client) troca o corpo de resposta
+    padrão (só o texto "Healthy"/"Unhealthy") pelo JSON detalhado descrito
+    na seção 3, compatível com dashboards de HealthChecks UI.
+
+O endpoint /health é registrado antes do middleware de OpenTelemetry excluir
+sua própria rota de métricas (/metrics) do tracing, mas o /health em si É
+rastreado normalmente pelo OpenTelemetry (aparece como uma requisição comum
+nos traces), e também passa pelo CorrelationIdMiddleware (recebe um header
+X-Correlation-Id na resposta, como qualquer outra rota da API).
+
+
+6. DEPENDÊNCIAS (NuGet)
+--------------------------------------------------------------------------------
+  - Microsoft.Extensions.Diagnostics.HealthChecks (nativo do ASP.NET Core,
+    parte do shared framework — não precisa de PackageReference própria)
+  - AspNetCore.HealthChecks.UI.Client (versão 9.0.0), usado apenas para
+    formatar a resposta JSON detalhada (UIResponseWriter)
+
+
+7. COMO TESTAR MANUALMENTE
+--------------------------------------------------------------------------------
+Com a aplicação e o Oracle acessíveis:
+
+    curl -i http://localhost:5000/health
+
+  Resposta esperada: HTTP 200 OK, corpo com "status": "Healthy".
+
+Simulando falha (para validar o cenário Unhealthy):
+  - Derrubar a rede/serviço do Oracle, ou
+  - Alterar temporariamente a ConnectionStrings:OracleConnection em
+    appsettings.json para um host/porta inválidos, ou
+  - Trocar temporariamente a senha configurada.
+
+  Resposta esperada: HTTP 503 Service Unavailable, corpo com
+  "status": "Unhealthy" e o campo "exception" preenchido com o erro real
+  de conexão (ex.: ORA-12154, ORA-01017, timeout de rede, etc.).
+
+
+8. COBERTURA DE TESTES AUTOMATIZADOS
+--------------------------------------------------------------------------------
+O endpoint /health é validado no projeto de testes de integração
+(tests/Challenge_Clyvo_NET.IntegrationTests/Controllers/
+ObservabilityEndpointsTests.cs), no teste:
+
+  Get_Health_RetornaOkQuandoOBancoInMemoryEstaAcessivel
+
+Nos testes de integração, o Oracle real é substituído pelo provedor EF Core
+InMemory (ver ApiWebApplicationFactory), que sempre responde CanConnectAsync
+com sucesso — por isso esse teste cobre apenas o cenário "Healthy". Não há
+hoje um teste automatizado para o cenário "Unhealthy" (banco indisponível),
+já que isso exigiria simular uma falha de conexão real ou introduzir uma
+abstração adicional em torno do AppDbContext para esse fim.
+
+
+9. LIMITAÇÕES CONHECIDAS E MELHORIAS FUTURAS
+--------------------------------------------------------------------------------
+  - Existe apenas 1 check registrado (OracleDB). Não há checks separados
+    para, por exemplo, espaço em disco, filas externas, ou serviços de
+    terceiros consumidos pela API — hoje ela não consome nenhum.
+  - Não há distinção entre "readiness" e "liveness" (rotas separadas, ex.:
+    /health/live e /health/ready), comum em ambientes Kubernetes. Hoje só
+    existe a rota única /health cobrindo os dois papéis.
+  - Não há tag/timeout customizado configurado por check (ex.: Timeout,
+    Tags); usa-se o comportamento padrão do subsistema de Health Checks.
+  - O corpo de erro expõe a mensagem de exceção do Oracle no campo
+    "exception" — em ambiente de produção exposto publicamente, pode ser
+    interessante avaliar se esse nível de detalhe deve ficar restrito a uma
+    rede interna/autenticada, para não vazar detalhes de infraestrutura.
+
+================================================================================
+ Fim do documento
+================================================================================
