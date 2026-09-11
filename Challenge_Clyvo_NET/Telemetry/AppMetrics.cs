@@ -3,15 +3,6 @@ using System.Diagnostics.Metrics;
 
 namespace Challenge_Clyvo_NET.Telemetry
 {
-    /// <summary>
-    /// Métricas de desempenho da aplicação: tempo de resposta e taxa de erros
-    /// das requisições HTTP, expostas via OpenTelemetry (endpoint /metrics no
-    /// formato Prometheus e, se configurado, também via OTLP).
-    ///
-    /// Complementa (não substitui) as métricas nativas do ASP.NET Core
-    /// (http.server.request.duration, etc.), fornecendo nomes e contadores
-    /// explícitos, fáceis de montar em um dashboard.
-    /// </summary>
     public class AppMetrics
     {
         public const string MeterName = "Challenge_Clyvo_NET";
@@ -37,13 +28,6 @@ namespace Challenge_Clyvo_NET.Telemetry
                 name: "app.http.server.requests.errors",
                 description: "Total de requisições HTTP finalizadas com erro (status >= 400).");
         }
-
-        /// <summary>
-        /// Registra o resultado de uma requisição: incrementa o total, o tempo
-        /// de resposta e, se o status indicar erro, o contador de erros —
-        /// todos com as mesmas tags, para permitir filtrar/agrupar por rota,
-        /// método e status no backend de métricas.
-        /// </summary>
         public void RecordRequest(string method, string route, int statusCode, double elapsedMilliseconds)
         {
             var tags = new TagList
