@@ -2,7 +2,6 @@
 
 namespace Challenge_Clyvo_NET.Telemetry
 {
-
     public static class AppActivitySource
     {
         public const string Name = "Challenge_Clyvo_NET";

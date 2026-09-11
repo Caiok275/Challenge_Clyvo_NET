@@ -22,6 +22,7 @@ namespace Challenge_Clyvo_NET.Middleware
         {
             var correlationId = ResolveCorrelationId(context);
             context.Items[HeaderName] = correlationId;
+
             var activity = Activity.Current;
             activity?.SetTag("app.correlation_id", correlationId);
             activity?.SetBaggage("correlation.id", correlationId);
@@ -79,7 +80,6 @@ namespace Challenge_Clyvo_NET.Middleware
             return Guid.NewGuid().ToString();
         }
     }
-    
     public static class CorrelationIdMiddlewareExtensions
     {
         public static IApplicationBuilder UseCorrelationId(this IApplicationBuilder app)

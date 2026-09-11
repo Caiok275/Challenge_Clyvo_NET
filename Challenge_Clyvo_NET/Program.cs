@@ -109,7 +109,7 @@ try
     {
     ResponseWriter = UIResponseWriter.WriteHealthCheckUIResponse
     });
-.
+
     app.MapPrometheusScrapingEndpoint();
 
     app.UseHttpsRedirection();
@@ -122,7 +122,7 @@ try
 }
 catch (Exception ex) when (ex is not HostAbortedException)
 {
-    Log.Fatal(ex, "A aplicação Challenge_Clyvo_NET fechou inesperadamente durante a inicialização");
+    Log.Fatal(ex, "A aplicação Challenge_Clyvo_NET terminou inesperadamente durante a inicialização");
 }
 finally
 {

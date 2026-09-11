@@ -28,6 +28,7 @@ namespace Challenge_Clyvo_NET.Telemetry
                 name: "app.http.server.requests.errors",
                 description: "Total de requisições HTTP finalizadas com erro (status >= 400).");
         }
+
         public void RecordRequest(string method, string route, int statusCode, double elapsedMilliseconds)
         {
             var tags = new TagList
