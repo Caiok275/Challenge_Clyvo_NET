@@ -413,9 +413,29 @@ A interface Swagger permitirá visualizar e testar todos os endpoints disponíve
 
 ---
 
+# Observabilidade e Testes
+
+| Requisito | Onde está | Como executar |
+|---|---|---|
+| **Health Checks** | `HealthChecks/OracleDBHealth.cs` | `dotnet run` → `GET /health` |
+| **Logging estruturado (Serilog)** | `Program.cs`, `Middleware/CorrelationId.cs` | Rodar a API e ver console/arquivo `logs/log-*.txt`; cada linha traz `CorrelationId` e `TraceId` |
+| **Tracing (OpenTelemetry)** | `Telemetry/AppActivitySource.cs` | Traces no console em Dev, ou em coletor OTLP configurado em `OpenTelemetry:OtlpEndpoint` |
+| **Métricas (OpenTelemetry)** | `Telemetry/AppMetrics.cs` | `GET /metrics` (tempo de resposta e taxa de erros) |
+| **Testes unitários (xUnit + Moq)** | `tests/Challenge_Clyvo_NET.UnitTests` | `dotnet test tests/Challenge_Clyvo_NET.UnitTests` |
+| **Testes de integração (WebApplicationFactory)** | `tests/Challenge_Clyvo_NET.IntegrationTests` | `dotnet test tests/Challenge_Clyvo_NET.IntegrationTests` |
+
+Rodar todos os testes de uma vez (raiz do repositório):
+
+```bash
+dotnet test
+```
+
+> Os testes usam mocks e EF Core InMemory, **não** precisam do Oracle.
+
+---
+
 # Integrantes
 
 - RM562979 - Caio Kenzo Tayra – 2TDSPI
 - RM563000 - Enzo Vieira Bernardini - 2TDSPI
-- RM564992 - Natan Freitas de Moraes – 2TDSPI
-- RM561857 - Nicolas Mota Cândido - 2TDSPI# Challenge_Clyvo_NET
+- RM561857 - Nicolas Mota Cândido - 2TDSPI
